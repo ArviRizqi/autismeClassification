@@ -25,7 +25,6 @@ if uploaded_file is not None:
     img_array = preprocess_image(image)
     prediction = model.predict(img_array)[0][0]
 
-    st.caption(f"🔎 Probabilitas Non-Autistik: {prediction:.2f}")
     if prediction <= 0.5:
         st.error(f"Model memprediksi: **Autistik** (probabilitas: {1 - prediction:.2f})")
     else:
