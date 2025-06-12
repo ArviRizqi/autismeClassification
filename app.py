@@ -1,15 +1,17 @@
-from huggingface_hub import hf_hub_download
-from tensorflow.keras.models import load_model
-import tensorflow as tf
 import streamlit as st
+import numpy as np
+from PIL import Image
+import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, models
+from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Dense, Dropout, LayerNormalization, MultiHeadAttention
+from huggingface_hub import hf_hub_download
 
 # Custom Transformer Layer
 class TransformerBlock(layers.Layer):
-    def __init__(self, embed_dim, num_heads, ff_dim, rate=0.1, **kwargs):  # Tambahkan **kwargs
-        super(TransformerBlock, self).__init__(**kwargs)  # Oper juga ke super
+    def __init__(self, embed_dim, num_heads, ff_dim, rate=0.1, **kwargs):
+        super(TransformerBlock, self).__init__(**kwargs)
         self.att = MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)
         self.ffn = models.Sequential([
             Dense(ff_dim, activation="relu"),
@@ -30,21 +32,23 @@ class TransformerBlock(layers.Layer):
         ffn_output = self.dropout2(ffn_output, training=training)
         return self.layernorm2(out1 + ffn_output)
 
-def get_config(self):
-    config = super().get_config()
-    config.update({
-        "embed_dim": self.att.key_dim,
-        "num_heads": self.att.num_heads,
-        "ff_dim": self.ffn.layers[0].units,
-        "rate": self.dropout1.rate,
-    })
-    return config
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embed_dim": self.att.key_dim,
+            "num_heads": self.att.num_heads,
+            "ff_dim": self.ffn.layers[0].units,
+            "rate": self.dropout1.rate,
+        })
+        return config
 
-from huggingface_hub import hf_hub_download
-from tensorflow.keras.models import load_model
+@st.cache_resource
+def load_model_from_hf():
+    model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="autism_hybrid_model.h5")
+    model = load_model(model_path, custom_objects={'TransformerBlock': TransformerBlock})
+    return model
 
-model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="autism_hybrid_model.h5")
-model = load_model(model_path, custom_objects={'TransformerBlock': TransformerBlock})
+model = load_model_from_hf()
 
 def preprocess_image(image):
     img = image.resize((224, 224))
