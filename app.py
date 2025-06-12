@@ -30,3 +30,4 @@ if uploaded_file is not None:
     else:
         st.success(f"Model memprediksi: **Tidak Autistik** (probabilitas: {prediction:.2f})")
 
+
