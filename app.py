@@ -21,7 +21,7 @@ uploaded_file = st.file_uploader("Upload gambar wajah anak", type=["jpg", "jpeg"
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Gambar yang diunggah", use_column_width=True)
+    st.image(image, caption="Gambar yang diunggah", use_container_width=True)
     img_array = preprocess_image(image)
     prediction = model.predict(img_array)[0][0]
 
