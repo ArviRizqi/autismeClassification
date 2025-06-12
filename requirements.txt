@@ -2,4 +2,3 @@ streamlit
 tensorflow==2.15
 huggingface_hub
 pillow
-huggingface_hub
