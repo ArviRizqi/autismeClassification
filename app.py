@@ -25,7 +25,8 @@ if uploaded_file is not None:
     img_array = preprocess_image(image)
     prediction = model.predict(img_array)[0][0]
 
-    if prediction > 0.5:
+    if prediction >= 0.5:
         st.error(f"Model memprediksi: **Autistik** (probabilitas: {prediction:.2f})")
     else:
-        st.success(f"Model memprediksi: **Tidak Autistik** (probabilitas: {1 - prediction:.2f})")
+        st.success(f"Model memprediksi: **Tidak Autistik** (probabilitas: {prediction:.2f})")
+
