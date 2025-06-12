@@ -1,5 +1,5 @@
 streamlit
-tensorflow
+tensorflow==2.15
+huggingface_hub
 pillow
-numpy
 huggingface_hub
