@@ -13,9 +13,8 @@ custom_objects = {
     'Dropout': Dropout,
     'LayerNormalization': LayerNormalization,
 }
-
 # Load model dari Hugging Face
-model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="hybrid_autism_model.keras")
+model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="autisme-classifier.keras")
 
 try:
     model = load_model(model_path, custom_objects=custom_objects)
