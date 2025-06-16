@@ -6,7 +6,7 @@ from PIL import Image
 from model_config import TransformerBlock  # Impor custom layer
 
 # Load model dari Hugging Face
-model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="autism_hybrid_model.h5")
+model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="hybrid_autism_model.keras")
 model = load_model(model_path, custom_objects={'TransformerBlock': TransformerBlock})
 
 def preprocess_image(image):
