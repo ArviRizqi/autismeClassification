@@ -1,13 +1,26 @@
 from huggingface_hub import hf_hub_download
 from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import MultiHeadAttention, Dense, Dropout, LayerNormalization
 import streamlit as st
 import numpy as np
 from PIL import Image
 from model_config import TransformerBlock  # Impor custom layer
 
+custom_objects = {
+    'TransformerBlock': TransformerBlock,
+    'MultiHeadAttention': MultiHeadAttention,
+    'Dense': Dense,
+    'Dropout': Dropout,
+    'LayerNormalization': LayerNormalization,
+}
+
 # Load model dari Hugging Face
 model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="hybrid_autism_model.keras")
-model = load_model(model_path, custom_objects={'TransformerBlock': TransformerBlock})
+
+try:
+    model = load_model(model_path, custom_objects=custom_objects)
+except Exception as e:
+    st.error(f"Gagal memuat model: {e}")
 
 def preprocess_image(image):
     img = image.resize((224, 224))
