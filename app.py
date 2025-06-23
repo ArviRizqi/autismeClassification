@@ -10,26 +10,24 @@ model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="
 model = load_model(model_path)
 
 # Konfigurasi halaman
-st.set_page_config(page_title="Deteksi Autisme", layout="centered")
+def preprocess_image(image):
+    img = image.resize((224, 224))
+    img = np.array(img) / 255.0
+    img = np.expand_dims(img, axis=0)
+    return img
 
-st.title("🧠 Deteksi Autisme dari Gambar")
-st.write("Upload gambar wajah untuk memprediksi apakah termasuk kategori autis atau tidak.")
+st.title("🧠 Deteksi Autisme dari Gambar Anak")
 
 # Upload gambar
-uploaded_file = st.file_uploader("Upload gambar", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload gambar wajah anak", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    img = Image.open(uploaded_file).convert("RGB")
-    st.image(img, caption="Gambar yang diunggah", use_column_width=True)
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Gambar yang diunggah", use_container_width=True)
+    img_array = preprocess_image(image)
+    prediction = model.predict(img_array)[0][0]
 
-    # Resize dan ubah jadi array
-    img = img.resize((224, 224))  # ubah sesuai input model Anda
-    img_array = img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0) / 255.0
-
-    # Prediksi
-    pred = model.predict(img_array)[0][0]
-    label = "Autis 🧩" if pred > 0.5 else "Non-Autis 🙂"
-
-    st.write(f"Hasil Prediksi: **{label}**")
-    st.write(f"Confidence Score: {pred:.4f}")
+    if prediction <= 0.5:
+        st.error(f"Model memprediksi: **Autistik** (probabilitas: {1 - prediction:.2f})")
+    else:
+        st.success(f"Model memprediksi: **Tidak Autistik** (probabilitas: {prediction:.2f})")
