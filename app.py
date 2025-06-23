@@ -1,11 +1,12 @@
+from huggingface_hub import hf_hub_download
+from tensorflow.keras.models import load_model
 import streamlit as st
-import tensorflow as tf
-from tensorflow.keras.preprocessing import image
 import numpy as np
 from PIL import Image
 
-# Load model
-model = tf.keras.models.load_model("model.h5")
+# Load model dari Hugging Face
+model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="model_fine_tuned_87.h5")
+model = load_model(model_path)
 
 # Konfigurasi halaman
 st.set_page_config(page_title="Deteksi Autisme", layout="centered")
