@@ -16,7 +16,8 @@ def preprocess_image(image):
     img = np.expand_dims(img, axis=0)
     return img
 
-st.title("🧠 Deteksi Autisme dari Gambar Anak")
+st.title("🧠 Deteksi Autisme dari Gambar Wajah Anak")
+st.subheader('Note: Hanya Gambar Wajah Anak')
 
 # Upload gambar
 uploaded_file = st.file_uploader("Upload gambar wajah anak", type=["jpg", "jpeg", "png"])
