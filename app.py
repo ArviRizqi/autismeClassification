@@ -45,7 +45,13 @@ if uploaded_file:
         pred = torch.argmax(probs, dim=1).item()
         conf = probs[0, pred].item()
 
-    labels = {0: "Non-Autistic", 1: "Autistic"}
-    result = labels.get(pred, "Unknown")
+        # Predict
+        outputs = model(face)
+        probs = torch.softmax(outputs, dim=1)
+        pred = torch.argmax(probs, dim=1).item()
+        conf = probs[0, pred].item()
+    
+        labels = {0: "Non-Autistic", 1: "Autistic"}
+        result = labels.get(pred, "Unknown")
 
-    st.write(f"Prediction: **{result}** ({conf*100:.2f}%)")
+        st.write(f"Prediction: **{result}** ({conf*100:.2f}%)")
