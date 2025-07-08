@@ -40,12 +40,6 @@ if uploaded_file:
 
     # Predict
     with torch.no_grad():
-        outputs = model(input_tensor)
-        probs = torch.softmax(outputs, dim=1)
-        pred = torch.argmax(probs, dim=1).item()
-        conf = probs[0, pred].item()
-
-        # Predict
         outputs = model(face)
         probs = torch.softmax(outputs, dim=1)
         pred = torch.argmax(probs, dim=1).item()
