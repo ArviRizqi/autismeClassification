@@ -24,6 +24,14 @@ def load_model():
 model = load_model()
 
 # ---------------------------
+# ⚡️ Define Transform
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5]*3, [0.5]*3)
+])
+
+# ---------------------------
 # ⚡️ Streamlit UI
 st.title("Autism Detection from Face")
 
@@ -38,25 +46,23 @@ if uploaded_file:
     if face is not None:
         # Ensure face tensor is valid
         if face.shape[0] == 3:
-            transform = transforms.Compose([
-                transforms.Resize((224,224)),
-                transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
-            ])
-            face = transform(face).unsqueeze(0)
+            # Convert to PIL Image for transform, or skip if transform accepts tensor
+            # face_pil = transforms.ToPILImage()(face) # Optional if needed
 
-            # Predict
-            outputs = model(face)
-            probs = torch.softmax(outputs, dim=1)
-            pred = torch.argmax(probs, dim=1).item()
-            conf = probs[0, pred].item()
-    
+            face = transform(face).unsqueeze(0)  # Add batch dim
+
+            with torch.no_grad():
+                outputs = model(face)
+                probs = torch.softmax(outputs, dim=1)
+                pred = torch.argmax(probs, dim=1).item()
+                conf = probs[0, pred].item()
+
             labels = {0: "Non-Autistic", 1: "Autistic"}
             result = labels.get(pred, "Unknown")
-    
+
             st.write(f"Prediction: **{result}** ({conf*100:.2f}%)")
         else:
             st.warning("Face detection failed. Please upload a clear face image.")
     else:
-        # Option 1: Stop execution with warning
         st.warning("No face detected. Please upload a clear face image.")
         st.stop()
