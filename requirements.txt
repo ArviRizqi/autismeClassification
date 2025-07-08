@@ -1,7 +1,6 @@
 streamlit
-streamlit
 torch
 torchvision
-Pillow
-huggingface_hub
+timm
 facenet-pytorch
+Pillow
