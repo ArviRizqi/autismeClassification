@@ -1,4 +1,7 @@
 streamlit
-tensorflow
+streamlit
+torch
+torchvision
+Pillow
 huggingface_hub
-pillow
+facenet-pytorch
