@@ -24,6 +24,14 @@ def load_model():
 model = load_model()
 
 # ---------------------------
+# ⚡️ Transform (same as training)
+transform = transforms.Compose([
+    transforms.Resize((224,224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
+])
+
+# ---------------------------
 # ⚡️ Streamlit UI
 st.title("Autism Detection from Face")
 
@@ -35,21 +43,26 @@ if uploaded_file:
     # Crop face with MTCNN
     face = mtcnn(image)
     if face is not None:
-        transform = transforms.Compose([
-            transforms.Resize((224,224)),
-            transforms.Normalize([0.485,0.456,0.406], [0.229,0.224,0.225])
-        ])
-        face = transform(face).unsqueeze(0)
+        # Convert cropped face to PIL Image then apply transform
+        face_pil = transforms.ToPILImage()(face)
+        face_tensor = transform(face_pil).unsqueeze(0)
 
         # Predict
-        outputs = model(face)
-        probs = torch.softmax(outputs, dim=1)
-        pred = torch.argmax(probs, dim=1).item()
-        conf = probs[0, pred].item()
+        with torch.no_grad():
+            outputs = model(face_tensor)
+            probs = torch.softmax(outputs, dim=1)
+            pred = torch.argmax(probs, dim=1).item()
+            conf = probs[0, pred].item()
 
         labels = {0: "Non-Autistic", 1: "Autistic"}
         result = labels.get(pred, "Unknown")
 
         st.write(f"Prediction: **{result}** ({conf*100:.2f}%)")
+
+        # Show detailed class probabilities
+        st.write("Class probabilities:")
+        for i, p in enumerate(probs[0]):
+            st.write(f"{labels[i]}: {p.item()*100:.2f}%")
+
     else:
         st.warning("No face detected.")
