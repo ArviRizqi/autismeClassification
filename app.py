@@ -128,7 +128,7 @@ if uploaded_file is not None:
 
                 predicted_class = CLASS_NAMES[prediction]
 
-                if predicted_class == 'Autistic':
+                if predicted_class == 'Non_Autistic':
                     st.success(f"Prediksi: **{predicted_class}**")
                     st.write(f"Keyakinan: **{confidence:.2f*100}**")
                 else:
