@@ -3,6 +3,6 @@ torch==2.2.2  # Sesuaikan dengan versi yang kompatibel
 torchvision==0.17.2 # Sesuaikan dengan versi yang kompatibel
 timm
 Pillow
-opencv-python
+opencv-python-headless
 facenet-pytorch==2.6.0 # Pastikan versi facenet-pytorch sesuai
 numpy
