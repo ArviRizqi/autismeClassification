@@ -9,7 +9,7 @@ import cv2 # Hanya jika Anda ingin menyertakan MTCNN di aplikasi deploy untuk cr
 from facenet_pytorch import MTCNN # Hanya jika Anda ingin menyertakan MTCNN di aplikasi deploy untuk cropping langsung
 
 # --- Konfigurasi ---
-MODEL_PATH = 'best_model_phase2.pt' # Pastikan nama file model sesuai
+MODEL_PATH = 'best_model_phase2_nocrop.pt' # Pastikan nama file model sesuai
 # Nama kelas Anda harus sesuai dengan urutan indeks yang digunakan saat pelatihan
 CLASS_NAMES = ['Autistic', 'Non_Autistic'] 
 TARGET_SIZE = 224 # Ukuran gambar yang diharapkan oleh model Anda
