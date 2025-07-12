@@ -128,7 +128,11 @@ if uploaded_file is not None:
 
                 predicted_class = CLASS_NAMES[prediction]
 
-                st.success(f"Prediksi: **{predicted_class}**")
+                if predicted_class == 'Autistic':
+                    st.error(f"Prediksi: **{predicted_class}**")
+                else:
+                    st.success(f"Prediksi: **{predicted_class}**")
+                    
                 st.write(f"Keyakinan: **{confidence:.2f}**")
 
                 # --- Bagian untuk menampilkan gambar wajah yang sudah di-crop ---
