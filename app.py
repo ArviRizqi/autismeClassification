@@ -130,10 +130,10 @@ if uploaded_file is not None:
 
                 if predicted_class == 'Non_Autistic':
                     st.success(f"Prediksi: **{predicted_class}**")
-                    st.write(f"Keyakinan: **{confidence:.2f*100}**")
                 else:
                     st.danger(f"Prediksi: **{predicted_class}**")
-                    st.write(f"Keyakinan: **{confidence:.2f*100}**")
+
+                st.write(f"Keyakinan: **{confidence:.2f*100}**")
 
                 # --- Bagian untuk menampilkan gambar wajah yang sudah di-crop ---
                 st.subheader("Gambar Wajah yang Digunakan untuk Prediksi:")
