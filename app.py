@@ -1,3 +1,4 @@
+from huggingface_hub import hf_hub_download
 import streamlit as st
 import torch
 from torchvision import transforms
@@ -9,7 +10,9 @@ import cv2 # Digunakan untuk konversi warna jika diperlukan, tapi dihindari untu
 from facenet_pytorch import MTCNN
 
 # --- Konfigurasi ---
-MODEL_PATH = 'best_model_phase2_nocrop.pt' # Pastikan nama file model sesuai
+# Load model dari Hugging Face
+model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="best_model_phase2_crop_78.pt")
+model = load_model(model_path)
 # Nama kelas Anda harus sesuai dengan urutan indeks yang digunakan saat pelatihan
 CLASS_NAMES = ['Autistic', 'Non_Autistic']
 TARGET_SIZE = 224 # Ukuran gambar yang diharapkan oleh model Anda
