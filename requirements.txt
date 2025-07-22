@@ -6,3 +6,4 @@ Pillow
 opencv-python-headless
 facenet-pytorch==2.6.0 # Pastikan versi facenet-pytorch sesuai
 numpy
+huggingface_hub
