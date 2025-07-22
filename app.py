@@ -11,8 +11,7 @@ from facenet_pytorch import MTCNN
 
 # --- Konfigurasi ---
 # Load model dari Hugging Face
-model_path = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="best_model_phase2_crop_78.pt")
-model = load_model(model_path)
+MODEL_PATH = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="best_model_phase2_crop_78.pt")
 # Nama kelas Anda harus sesuai dengan urutan indeks yang digunakan saat pelatihan
 CLASS_NAMES = ['Autistic', 'Non_Autistic']
 TARGET_SIZE = 224 # Ukuran gambar yang diharapkan oleh model Anda
