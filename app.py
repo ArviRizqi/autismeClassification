@@ -140,10 +140,8 @@ def load_mtcnn_model():
         device='cpu'
     )
 
-
 @st.cache_resource
 def load_model():
-    """Load model dengan arsitektur yang benar"""
     model = FusionBackboneClassifier(
         backbone_name=BACKBONE_NAME,
         out_indices=(1, 2, 3),
@@ -152,12 +150,29 @@ def load_model():
         fusion_dropout=0.4,
         classifier_dropout=0.25,
     )
-    
-    # Load state_dict
-    state_dict = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
-    model.load_state_dict(state_dict)
+
+    checkpoint = torch.load(MODEL_PATH, map_location="cpu")
+
+    # === HANDLE BERBAGAI FORMAT SAVE ===
+    if isinstance(checkpoint, dict):
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        elif "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+        else:
+            state_dict = checkpoint
+    else:
+        state_dict = checkpoint
+
+    # === HANDLE DataParallel (module.) ===
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        new_key = k.replace("module.", "")
+        new_state_dict[new_key] = v
+
+    model.load_state_dict(new_state_dict, strict=True)
     model.eval()
-    
+
     return model
 
 
