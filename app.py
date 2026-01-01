@@ -142,18 +142,20 @@ def load_mtcnn_model():
 
 @st.cache_resource
 def load_model():
+    # 1. Build model (HARUS sama dengan training)
     model = FusionBackboneClassifier(
         backbone_name=BACKBONE_NAME,
-        out_indices=(1, 2, 3),
+        out_indices=(1, 2, 3),   # ganti jika training beda
         fusion_dim=512,
-        num_classes=len(CLASS_NAMES),
+        num_classes=len(CLASS_NAMES),  # 2 class
         fusion_dropout=0.4,
         classifier_dropout=0.25,
     )
 
+    # 2. Load checkpoint
     checkpoint = torch.load(MODEL_PATH, map_location="cpu")
 
-    # === HANDLE BERBAGAI FORMAT SAVE ===
+    # 3. Ambil state_dict dengan aman (handle semua format)
     if isinstance(checkpoint, dict):
         if "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
@@ -164,15 +166,45 @@ def load_model():
     else:
         state_dict = checkpoint
 
-    # === HANDLE DataParallel (module.) ===
-    new_state_dict = {}
+    # 4. Hapus prefix 'module.' (DataParallel)
+    cleaned_state_dict = {}
     for k, v in state_dict.items():
         new_key = k.replace("module.", "")
-        new_state_dict[new_key] = v
+        cleaned_state_dict[new_key] = v
 
-    model.load_state_dict(new_state_dict, strict=True)
+    # 5. HAPUS classifier lama (paling sering bikin error)
+    filtered_state_dict = {
+        k: v for k, v in cleaned_state_dict.items()
+        if not k.startswith("classifier.")
+    }
+
+    # 6. Load backbone + fusion saja
+    missing, unexpected = model.load_state_dict(
+        filtered_state_dict,
+        strict=False
+    )
+
+    # 7. (OPSIONAL) Print log ke Streamlit Cloud
+    if missing:
+        print("⚠️ Missing keys:")
+        for k in missing:
+            print(k)
+
+    if unexpected:
+        print("⚠️ Unexpected keys:")
+        for k in unexpected:
+            print(k)
+
+    # 8. Rebuild classifier (fresh, clean)
+    model.classifier = nn.Sequential(
+        nn.Linear(512, 512),
+        nn.BatchNorm1d(512),
+        nn.SiLU(),
+        nn.Dropout(0.25),
+        nn.Linear(512, len(CLASS_NAMES))
+    )
+
     model.eval()
-
     return model
 
 
