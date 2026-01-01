@@ -1,183 +1,475 @@
 from huggingface_hub import hf_hub_download
 import streamlit as st
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
 import timm
 import numpy as np
-import os
-import cv2 # Digunakan untuk konversi warna jika diperlukan, tapi dihindari untuk MTCNN detect
 from facenet_pytorch import MTCNN
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-# --- Konfigurasi ---
-# Load model dari Hugging Face
-MODEL_PATH = hf_hub_download(repo_id="Artz-03/autismeClassification", filename="best_model_phase2_crop_78.pt")
-# Nama kelas Anda harus sesuai dengan urutan indeks yang digunakan saat pelatihan
+# ============================================================================
+# DEFINISI ARSITEKTUR MODEL (SAMA DENGAN TRAINING)
+# ============================================================================
+
+class SELayer(nn.Module):
+    """Squeeze-and-Excitation Block"""
+    def __init__(self, channel, reduction=16):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
+class OptimizedFeatureFusionBlock(nn.Module):
+    def __init__(self, input_channels, output_channels=512, dropout_rate=0.4):
+        super().__init__()
+        self.projs = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(c, output_channels, 1, bias=False),
+                nn.BatchNorm2d(output_channels),
+                nn.SiLU(inplace=True)
+            ) for c in input_channels
+        ])
+
+        self.gate_gen = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(output_channels * len(input_channels), output_channels, 1),
+            nn.Sigmoid()
+        )
+
+        self.se_block = SELayer(output_channels, reduction=8)
+        self.fuse_conv = nn.Conv2d(output_channels, output_channels, 3, padding=1, bias=False)
+        self.fuse_bn = nn.BatchNorm2d(output_channels)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, feature_maps):
+        target_h, target_w = feature_maps[-1].shape[2:]
+        projected = []
+        for fmap, proj in zip(feature_maps, self.projs):
+            p = F.interpolate(fmap, size=(target_h, target_w), mode='bilinear', align_corners=False)
+            projected.append(proj(p))
+
+        cat_feats = torch.cat(projected, dim=1)
+        gate = self.gate_gen(cat_feats)
+        fused = sum(projected) * gate
+
+        refined = self.fuse_bn(self.fuse_conv(fused))
+        fused = F.silu(refined + fused)
+        fused = self.se_block(fused)
+
+        gap = F.adaptive_avg_pool2d(fused, 1).flatten(1)
+        gmp = F.adaptive_max_pool2d(fused, 1).flatten(1)
+        return self.dropout(gap + gmp)
+
+
+class FusionBackboneClassifier(nn.Module):
+    def __init__(self, backbone_name="mobilevitv2_100", out_indices=(1,2,3),
+                 fusion_dim=512, num_classes=2,
+                 fusion_dropout=0.4, classifier_dropout=0.25):
+        super().__init__()
+        self.backbone = timm.create_model(
+            backbone_name, pretrained=False, features_only=True, out_indices=out_indices
+        )
+        in_chs = self.backbone.feature_info.channels()
+
+        self.fusion = OptimizedFeatureFusionBlock(
+            in_chs, output_channels=fusion_dim, dropout_rate=fusion_dropout
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(fusion_dim, fusion_dim),
+            nn.BatchNorm1d(fusion_dim),
+            nn.SiLU(),
+            nn.Dropout(classifier_dropout),
+            nn.Linear(fusion_dim, num_classes)
+        )
+
+    def forward(self, x):
+        feats = self.backbone(x)
+        fused_vec = self.fusion(feats)
+        logits = self.classifier(fused_vec)
+        return logits
+
+
+# ============================================================================
+# KONFIGURASI
+# ============================================================================
+
 CLASS_NAMES = ['Autistic', 'Non_Autistic']
-TARGET_SIZE = 224 # Ukuran gambar yang diharapkan oleh model Anda
+TARGET_SIZE = 224
+BACKBONE_NAME = "mobilevitv2_100"  # Sesuai dengan training
 
-@st.cache_resource # Cache resource untuk MTCNN model
+# ImageNet normalization (SESUAI TRAINING!)
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# Download model dari Hugging Face
+MODEL_PATH = hf_hub_download(
+    repo_id="Artz-03/autismeClassification", 
+    filename="mobilevitv2_phase2_optimized.pth"
+)
+
+
+# ============================================================================
+# LOAD MODELS
+# ============================================================================
+
+@st.cache_resource
 def load_mtcnn_model():
-    # MTCNN akan berjalan di CPU di Streamlit Cloud
-    # image_size di MTCNN adalah untuk output gambar yang di-crop, bukan input deteksi
     return MTCNN(
         image_size=TARGET_SIZE,
         margin=0,
         min_face_size=20,
         thresholds=[0.6, 0.7, 0.7],
         factor=0.709,
-        post_process=False, # Jangan lakukan post-processing otomatis
+        post_process=False,
         device='cpu'
     )
 
+
+@st.cache_resource
+def load_model():
+    """Load model dengan arsitektur yang benar"""
+    model = FusionBackboneClassifier(
+        backbone_name=BACKBONE_NAME,
+        out_indices=(1, 2, 3),
+        fusion_dim=512,
+        num_classes=len(CLASS_NAMES),
+        fusion_dropout=0.4,
+        classifier_dropout=0.25,
+    )
+    
+    # Load state_dict
+    state_dict = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
+    model.load_state_dict(state_dict)
+    model.eval()
+    
+    return model
+
+
 mtcnn = load_mtcnn_model()
+model = load_model()
+
+
+# ============================================================================
+# IMAGE PROCESSING
+# ============================================================================
+
+def get_transforms():
+    """Transform yang SAMA dengan validation/test di training"""
+    return A.Compose([
+        A.Resize(256, 256),
+        A.CenterCrop(224, 224),
+        A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ToTensorV2(),
+    ])
+
+
+def get_tta_transforms():
+    """TTA transforms untuk meningkatkan akurasi"""
+    return [
+        # Original
+        A.Compose([
+            A.Resize(256, 256),
+            A.CenterCrop(224, 224),
+            A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2()
+        ]),
+        # Horizontal Flip
+        A.Compose([
+            A.Resize(256, 256),
+            A.CenterCrop(224, 224),
+            A.HorizontalFlip(p=1.0),
+            A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2()
+        ]),
+        # Scale Up
+        A.Compose([
+            A.Resize(300, 300),
+            A.CenterCrop(224, 224),
+            A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2()
+        ]),
+        # Slight Rotation
+        A.Compose([
+            A.Resize(256, 256),
+            A.CenterCrop(224, 224),
+            A.Rotate(limit=(10, 10), p=1.0),
+            A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            ToTensorV2()
+        ]),
+    ]
+
 
 def process_image_for_model(img_pil, mtcnn_detector, target_size=224):
     """
-    Fungsi untuk mendeteksi dan meng-crop wajah, lalu mempersiapkan gambar untuk model.
-    Args:
-        img_pil (PIL.Image.Image): Gambar input dalam format PIL Image.
-        mtcnn_detector (MTCNN): Objek MTCNN yang sudah diinisialisasi.
-        target_size (int): Ukuran target untuk gambar yang diproses.
-    Returns:
-        torch.Tensor: Tensor gambar yang sudah diproses, siap untuk model.
+    Deteksi dan crop wajah, lalu persiapkan untuk model
     """
-    # MTCNN dapat langsung menerima PIL Image atau NumPy array (RGB).
-    # Memberikan PIL Image secara langsung adalah cara yang paling bersih.
     boxes, _ = mtcnn_detector.detect(img_pil)
-
-    processed_pil_image = None # Akan menyimpan PIL Image dari wajah yang di-crop atau gambar asli
+    processed_pil_image = None
 
     if boxes is not None and len(boxes) > 0:
-        # Pilih wajah terbesar atau wajah pertama
+        # Pilih wajah terbesar
         best_box = boxes[0]
         if len(boxes) > 1:
             areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in boxes]
             best_box = boxes[np.argmax(areas)]
 
         x1, y1, x2, y2 = [int(b) for b in best_box]
-
-        # Pastikan koordinat dalam batas gambar asli
         width, height = img_pil.size
+        
+        # Clamp coordinates
         x1 = max(0, x1)
         y1 = max(0, y1)
         x2 = min(width, x2)
         y2 = min(height, y2)
 
-        # Lakukan cropping dari PIL Image asli
-        if x1 >= x2 or y1 >= y2: # Periksa area crop yang tidak valid (lebar/tinggi nol atau negatif)
-            st.warning("Koordinat wajah yang terdeteksi tidak valid (area crop kosong). Menggunakan gambar asli.")
+        if x1 >= x2 or y1 >= y2:
+            st.warning("⚠️ Koordinat wajah tidak valid. Menggunakan gambar asli.")
             processed_pil_image = img_pil
         else:
             cropped_face_pil = img_pil.crop((x1, y1, x2, y2))
-            # Periksa apakah hasil crop kosong (misalnya jika koordinat sangat kecil)
             if cropped_face_pil.size[0] == 0 or cropped_face_pil.size[1] == 0:
-                st.warning("Wajah terdeteksi, tetapi area crop kosong setelah cropping. Menggunakan gambar asli.")
+                st.warning("⚠️ Area crop kosong. Menggunakan gambar asli.")
                 processed_pil_image = img_pil
             else:
                 processed_pil_image = cropped_face_pil
     else:
-        st.warning("Tidak ada wajah terdeteksi. Menggunakan gambar asli untuk prediksi.")
-        processed_pil_image = img_pil # Jika tidak ada wajah, gunakan seluruh gambar
+        st.warning("⚠️ Tidak ada wajah terdeteksi. Menggunakan gambar asli.")
+        processed_pil_image = img_pil
 
-    # Transformasi yang digunakan saat pelatihan
-    # Karena 'processed_pil_image' sudah berupa PIL Image, 'transforms.ToPILImage()' tidak diperlukan.
-    transform = transforms.Compose([
-        transforms.Resize((target_size, target_size)), # Mengubah ukuran gambar PIL
-        transforms.ToTensor(),                          # Mengubah PIL Image menjadi PyTorch Tensor (HWC -> CHW, 0-255 -> 0.0-1.0)
-        transforms.Normalize([0.5]*3, [0.5]*3)          # Normalisasi Tensor
-    ])
+    return processed_pil_image
 
-    return transform(processed_pil_image)
 
-# --- Muat Model PyTorch yang Telah Dilatih ---
-# Gunakan st.cache_resource untuk melakukan caching model
-@st.cache_resource
-def load_model():
-    model = timm.create_model("mobilevit_s", pretrained=False, num_classes=len(CLASS_NAMES))
-    # Muat state_dict di CPU
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
-    model.eval() # Set model ke mode evaluasi
-    return model
+def predict_single(image_np, model, transform):
+    """Prediksi tunggal tanpa TTA"""
+    transformed = transform(image=image_np)['image']
+    input_batch = transformed.unsqueeze(0)
+    
+    with torch.no_grad():
+        output = model(input_batch)
+        probabilities = torch.softmax(output, dim=1)
+        prediction = torch.argmax(probabilities, dim=1).item()
+        confidence = probabilities[0][prediction].item()
+    
+    return prediction, confidence, probabilities[0].numpy()
 
-model = load_model()
 
-# --- Aplikasi Streamlit ---
-st.title("Klasifikasi Autisme pada Wajah")
-st.write("Unggah gambar wajah untuk memprediksi apakah orang tersebut autisme atau non-autisme.")
+def predict_with_tta(image_np, model, tta_transforms):
+    """Prediksi dengan TTA untuk akurasi lebih tinggi"""
+    all_probs = []
+    
+    with torch.no_grad():
+        for i, transform in enumerate(tta_transforms):
+            transformed = transform(image=image_np)['image']
+            input_batch = transformed.unsqueeze(0)
+            
+            output = model(input_batch)
+            probs = torch.softmax(output, dim=1).cpu().numpy()
+            
+            # Beri bobot lebih pada original image
+            weight = 1.5 if i == 0 else 1.0
+            all_probs.append(probs * weight)
+    
+    # Weighted average
+    total_weight = 1.5 + (len(tta_transforms) - 1) * 1.0
+    avg_probs = np.sum(all_probs, axis=0) / total_weight
+    
+    prediction = np.argmax(avg_probs[0])
+    confidence = avg_probs[0][prediction]
+    
+    return prediction, confidence, avg_probs[0]
 
-uploaded_file = st.file_uploader("Pilih sebuah gambar...", type=["jpg", "jpeg", "png"])
+
+# ============================================================================
+# STREAMLIT UI
+# ============================================================================
+
+st.set_page_config(
+    page_title="Autism Classification",
+    page_icon="🧠",
+    layout="wide"
+)
+
+st.title("🧠 Klasifikasi Autisme dari Gambar Wajah")
+st.markdown("""
+Aplikasi ini menggunakan deep learning model **MobileViTV2** dengan arsitektur *Fusion Backbone Classifier* 
+untuk mengklasifikasikan gambar wajah sebagai **Autistic** atau **Non-Autistic**.
+""")
+
+# Sidebar
+with st.sidebar:
+    st.header("⚙️ Pengaturan")
+    use_tta = st.checkbox(
+        "Gunakan TTA (Test-Time Augmentation)", 
+        value=True,
+        help="TTA meningkatkan akurasi dengan rata-rata prediksi dari beberapa augmentasi"
+    )
+    
+    st.markdown("---")
+    st.header("📊 Info Model")
+    st.info(f"""
+    - **Backbone**: {BACKBONE_NAME}
+    - **Input Size**: {TARGET_SIZE}x{TARGET_SIZE}
+    - **Classes**: {', '.join(CLASS_NAMES)}
+    - **TTA Transforms**: {len(get_tta_transforms()) if use_tta else 0}
+    """)
+    
+    st.markdown("---")
+    st.header("⚠️ Disclaimer")
+    st.warning("""
+    Aplikasi ini adalah **demo penelitian** dan **TIDAK** dapat digunakan 
+    sebagai diagnosis medis. Konsultasikan dengan profesional kesehatan 
+    untuk diagnosis yang akurat.
+    """)
+
+# Main content
+uploaded_file = st.file_uploader(
+    "📤 Unggah Gambar Wajah", 
+    type=["jpg", "jpeg", "png"],
+    help="Unggah foto wajah yang jelas untuk hasil terbaik"
+)
 
 if uploaded_file is not None:
-    # Tampilkan gambar yang diunggah
+    # Tampilkan gambar
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption='Gambar yang Diunggah', use_column_width=True)
-
-    # Pre-process gambar dan lakukan prediksi
-    if st.button("Prediksi"):
-        with st.spinner('Memproses dan memprediksi...'):
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📷 Gambar Asli")
+        st.image(image, use_column_width=True)
+    
+    # Tombol prediksi
+    if st.button("🔮 Mulai Prediksi", type="primary"):
+        with st.spinner('🔄 Memproses gambar...'):
             try:
-                # Proses gambar: deteksi/crop wajah dan transformasi
-                input_tensor = process_image_for_model(image, mtcnn, TARGET_SIZE)
-                input_batch = input_tensor.unsqueeze(0) # Tambahkan dimensi batch (batch_size=1)
-
-                # Lakukan inferensi
-                with torch.no_grad(): # Nonaktifkan perhitungan gradien untuk inferensi
-                    output = model(input_batch)
-                    probabilities = torch.softmax(output, dim=1)
-                    prediction = torch.argmax(probabilities, dim=1).item()
-                    confidence = probabilities[0][prediction].item()
-
+                # 1. Face detection & cropping
+                processed_pil = process_image_for_model(image, mtcnn, TARGET_SIZE)
+                processed_np = np.array(processed_pil)
+                
+                with col2:
+                    st.subheader("✂️ Wajah yang Dideteksi")
+                    st.image(processed_pil, use_column_width=True)
+                
+                # 2. Prediction
+                if use_tta:
+                    st.info("🔄 Menggunakan TTA (4 augmentations)...")
+                    tta_transforms = get_tta_transforms()
+                    prediction, confidence, probs = predict_with_tta(
+                        processed_np, model, tta_transforms
+                    )
+                else:
+                    st.info("⚡ Prediksi cepat (tanpa TTA)...")
+                    transform = get_transforms()
+                    prediction, confidence, probs = predict_single(
+                        processed_np, model, transform
+                    )
+                
+                # 3. Display results
+                st.markdown("---")
                 predicted_class = CLASS_NAMES[prediction]
-
-                if predicted_class == 'Autistic':
-                    st.error(f"Prediksi: **{predicted_class}**")
-                else:
-                    st.success(f"Prediksi: **{predicted_class}**")
-                    
-                st.write(f"Keyakinan: **{confidence:.2f}**")
-
-                # --- Bagian untuk menampilkan gambar wajah yang sudah di-crop ---
-                st.subheader("Gambar Wajah yang Digunakan untuk Prediksi:")
-                # Ulangi proses cropping hanya untuk tampilan. Gunakan PIL Image asli.
-                boxes_display, _ = mtcnn.detect(image) # Langsung berikan PIL Image untuk deteksi
-
-                if boxes_display is not None and len(boxes_display) > 0:
-                    best_box_display = boxes_display[0]
-                    if len(boxes_display) > 1:
-                        areas_display = [(box[2] - box[0]) * (box[3] - box[1]) for box in boxes_display]
-                        best_box_display = boxes_display[np.argmax(areas_display)]
-
-                    x1, y1, x2, y2 = [int(b) for b in best_box_display]
-
-                    # Pastikan koordinat dalam batas gambar asli
-                    width_display, height_display = image.size
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(width_display, x2)
-                    y2 = min(height_display, y2)
-
-                    if x1 >= x2 or y1 >= y2: # Periksa area crop yang tidak valid
-                        st.image(image, caption="Tidak dapat meng-crop wajah. Menampilkan gambar asli.", use_column_width=True)
+                
+                # Result card
+                result_col1, result_col2, result_col3 = st.columns([1, 2, 1])
+                
+                with result_col2:
+                    if predicted_class == 'Autistic':
+                        st.error(f"### 🔴 Prediksi: **{predicted_class}**")
                     else:
-                        cropped_face_display_pil = image.crop((x1, y1, x2, y2))
-                        if cropped_face_display_pil.size[0] == 0 or cropped_face_display_pil.size[1] == 0:
-                            st.image(image, caption="Tidak dapat meng-crop wajah. Menampilkan gambar asli.", use_column_width=True)
-                        else:
-                            st.image(cropped_face_display_pil, caption="Wajah yang di-crop", use_column_width=True)
+                        st.success(f"### 🟢 Prediksi: **{predicted_class}**")
+                    
+                    # Confidence bar
+                    st.metric("Confidence", f"{confidence*100:.2f}%")
+                    st.progress(confidence)
+                    
+                    # Probabilitas untuk setiap kelas
+                    st.markdown("#### 📊 Probabilitas per Kelas:")
+                    for i, class_name in enumerate(CLASS_NAMES):
+                        prob_pct = probs[i] * 100
+                        st.write(f"**{class_name}**: {prob_pct:.2f}%")
+                        st.progress(probs[i])
+                
+                # Interpretasi
+                st.markdown("---")
+                st.subheader("💡 Interpretasi Hasil")
+                
+                if confidence > 0.9:
+                    conf_level = "sangat tinggi"
+                    emoji = "🎯"
+                elif confidence > 0.75:
+                    conf_level = "tinggi"
+                    emoji = "✅"
+                elif confidence > 0.6:
+                    conf_level = "sedang"
+                    emoji = "⚠️"
                 else:
-                    st.image(image, caption="Tidak ada wajah terdeteksi. Menampilkan gambar asli.", use_column_width=True)
-
+                    conf_level = "rendah"
+                    emoji = "❓"
+                
+                st.info(f"""
+                {emoji} Model memiliki **confidence {conf_level}** ({confidence*100:.1f}%) 
+                bahwa gambar ini termasuk kelas **{predicted_class}**.
+                
+                {'**TTA digunakan**: Prediksi ini adalah hasil rata-rata dari 4 augmentasi berbeda untuk akurasi lebih tinggi.' if use_tta else '**TTA tidak digunakan**: Untuk akurasi lebih tinggi, aktifkan TTA di sidebar.'}
+                """)
+                
             except Exception as e:
-                st.error(f"Terjadi kesalahan saat memproses gambar: {e}")
-                st.error("Pastikan gambar adalah gambar wajah yang jelas dan model 'best_model_phase2_nocrop.pt' ada di direktori yang sama.")
+                st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                st.exception(e)
 
-st.sidebar.header("Tentang Aplikasi Ini")
-st.sidebar.info(
-    "Aplikasi ini menggunakan model deep learning MobileViT yang telah dilatih "
-    "untuk mengklasifikasikan gambar wajah sebagai 'Autisme' atau 'Non-Autisme'. "
-    "Model ini sebelumnya telah melalui tahap *pre-processing* dengan MTCNN untuk "
-    "mendeteksi dan meng-crop wajah. "
-    "**Catatan**: Ini adalah aplikasi demo dan hasil prediksi tidak boleh digunakan "
-    "sebagai diagnosis medis."
-)
+else:
+    # Instruksi awal
+    st.info("""
+    👆 **Cara Menggunakan:**
+    1. Unggah foto wajah (JPG/PNG)
+    2. Aktifkan/nonaktifkan TTA di sidebar (opsional)
+    3. Klik tombol "Mulai Prediksi"
+    4. Lihat hasil klasifikasi
+    """)
+    
+    # Demo image placeholder
+    st.markdown("---")
+    st.subheader("📝 Tips untuk Hasil Terbaik:")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.success("✅ **Good**")
+        st.markdown("""
+        - Wajah terlihat jelas
+        - Pencahayaan baik
+        - Resolusi tinggi
+        - Satu wajah dominan
+        """)
+    
+    with col2:
+        st.warning("⚠️ **Acceptable**")
+        st.markdown("""
+        - Wajah agak miring
+        - Pencahayaan normal
+        - Resolusi sedang
+        - Beberapa wajah
+        """)
+    
+    with col3:
+        st.error("❌ **Avoid**")
+        st.markdown("""
+        - Wajah tertutup
+        - Terlalu gelap/terang
+        - Resolusi rendah
+        - Tidak ada wajah
+        """)
