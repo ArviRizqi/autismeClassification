@@ -12,6 +12,15 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 # ============================================================================
+# STREAMLIT PAGE CONFIG - HARUS PALING PERTAMA!
+# ============================================================================
+st.set_page_config(
+    page_title="Autism Classification",
+    page_icon="🧠",
+    layout="wide"
+)
+
+# ============================================================================
 # DEFINISI ARSITEKTUR MODEL (SAMA DENGAN TRAINING)
 # ============================================================================
 
@@ -324,12 +333,6 @@ def predict_with_tta(image_np, model, tta_transforms):
 # ============================================================================
 # STREAMLIT UI
 # ============================================================================
-
-st.set_page_config(
-    page_title="Autism Classification",
-    page_icon="🧠",
-    layout="wide"
-)
 
 st.title("🧠 Klasifikasi Autisme dari Gambar Wajah")
 st.markdown("""
