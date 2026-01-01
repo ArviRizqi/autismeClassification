@@ -78,7 +78,7 @@ class OptimizedFeatureFusionBlock(nn.Module):
 
 class FusionBackboneClassifier(nn.Module):
     def __init__(self, backbone_name="mobilevitv2_100", out_indices=(1,2,3),
-                 fusion_dim=512, num_classes=2,
+                 fusion_dim=768, num_classes=2,
                  fusion_dropout=0.4, classifier_dropout=0.25):
         super().__init__()
         self.backbone = timm.create_model(
@@ -145,7 +145,7 @@ def load_model():
     model = FusionBackboneClassifier(
         backbone_name=BACKBONE_NAME,
         out_indices=(1, 2, 3),
-        fusion_dim=512,
+        fusion_dim=768,
         num_classes=len(CLASS_NAMES),
         fusion_dropout=0.4,
         classifier_dropout=0.25,
@@ -170,23 +170,18 @@ def load_model():
         for k, v in state_dict.items()
     }
 
-    # HAPUS classifier lama (paling sering mismatch)
-    state_dict = {
-        k: v for k, v in state_dict.items()
-        if not k.startswith("classifier.")
-    }
-
     # LOAD TANPA STRICT
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(state_dict, strict=True)
 
     # Rebuild classifier baru (sesuai 2 class)
     model.classifier = nn.Sequential(
-        nn.Linear(512, 512),
-        nn.BatchNorm1d(512),
+        nn.Linear(768, 768),
+        nn.BatchNorm1d(768),
         nn.SiLU(),
         nn.Dropout(0.25),
-        nn.Linear(512, len(CLASS_NAMES))
+        nn.Linear(768, len(CLASS_NAMES))
     )
+
 
     model.eval()
     return model
