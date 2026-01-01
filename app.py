@@ -145,8 +145,8 @@ def load_model():
     model = FusionBackboneClassifier(
         backbone_name=BACKBONE_NAME,
         out_indices=(1, 2, 3),
-        fusion_dim=768,
-        num_classes=len(CLASS_NAMES),
+        fusion_dim=768,  # ✅ Sudah benar
+        num_classes=len(CLASS_NAMES),  # ✅ Sudah 2 class
         fusion_dropout=0.4,
         classifier_dropout=0.25,
     )
@@ -170,18 +170,11 @@ def load_model():
         for k, v in state_dict.items()
     }
 
-    # LOAD TANPA STRICT
+    # LOAD STATE DICT
     model.load_state_dict(state_dict, strict=True)
-
-    # Rebuild classifier baru (sesuai 2 class)
-    model.classifier = nn.Sequential(
-        nn.Linear(768, 768),
-        nn.BatchNorm1d(768),
-        nn.SiLU(),
-        nn.Dropout(0.25),
-        nn.Linear(768, len(CLASS_NAMES))
-    )
-
+    
+    # HAPUS BAGIAN REBUILD CLASSIFIER - TIDAK PERLU!
+    # Classifier sudah ada di checkpoint dan sudah sesuai dengan 2 class
 
     model.eval()
     return model
