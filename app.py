@@ -301,7 +301,10 @@ def predict_single(image_np, model, transform):
         prediction = torch.argmax(probabilities, dim=1).item()
         confidence = probabilities[0][prediction].item()
     
-    return prediction, confidence, probabilities[0].numpy()
+    # Convert ke Python native float (bukan numpy float32)
+    probs_array = probabilities[0].cpu().numpy().astype(float)
+    
+    return prediction, float(confidence), probs_array
 
 
 def predict_with_tta(image_np, model, tta_transforms):
@@ -324,10 +327,13 @@ def predict_with_tta(image_np, model, tta_transforms):
     total_weight = 1.5 + (len(tta_transforms) - 1) * 1.0
     avg_probs = np.sum(all_probs, axis=0) / total_weight
     
-    prediction = np.argmax(avg_probs[0])
-    confidence = avg_probs[0][prediction]
+    prediction = int(np.argmax(avg_probs[0]))
+    confidence = float(avg_probs[0][prediction])
     
-    return prediction, confidence, avg_probs[0]
+    # Convert ke Python native float array
+    probs_array = avg_probs[0].astype(float)
+    
+    return prediction, confidence, probs_array
 
 
 # ============================================================================
@@ -433,14 +439,18 @@ if uploaded_file is not None:
                     
                     # Confidence bar
                     st.metric("Confidence", f"{confidence*100:.2f}%")
-                    st.progress(confidence)
+                    # Clamp antara 0.0 - 1.0 untuk progress bar
+                    conf_value = min(max(confidence, 0.0), 1.0)
+                    st.progress(conf_value)
                     
                     # Probabilitas untuk setiap kelas
                     st.markdown("#### 📊 Probabilitas per Kelas:")
                     for i, class_name in enumerate(CLASS_NAMES):
                         prob_pct = probs[i] * 100
                         st.write(f"**{class_name}**: {prob_pct:.2f}%")
-                        st.progress(float(probs[i]))
+                        # Clamp probability antara 0.0 dan 1.0
+                        prob_value = min(max(probs[i], 0.0), 1.0)
+                        st.progress(prob_value)
                 
                 # Interpretasi
                 st.markdown("---")
