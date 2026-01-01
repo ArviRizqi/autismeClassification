@@ -111,9 +111,10 @@ class FusionBackboneClassifier(nn.Module):
 
 CLASS_NAMES = ['Autistic', 'Non_Autistic']
 TARGET_SIZE = 224
-BACKBONE_NAME = "mobilevitv2_100"  # Sesuai dengan training
+BACKBONE_NAME = "mobilevitv2_100"
+FUSION_DIM = 768  # PENTING: Harus 768 sesuai checkpoint!
 
-# ImageNet normalization (SESUAI TRAINING!)
+# ImageNet normalization
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
@@ -130,6 +131,7 @@ MODEL_PATH = hf_hub_download(
 
 @st.cache_resource
 def load_mtcnn_model():
+    """Load MTCNN untuk face detection"""
     return MTCNN(
         image_size=TARGET_SIZE,
         margin=0,
@@ -140,20 +142,25 @@ def load_mtcnn_model():
         device='cpu'
     )
 
+
 @st.cache_resource
-def load_model():
+def load_model_v2():
+    """Load model classifier - v2 untuk force refresh cache"""
+    
+    # Buat model dengan fusion_dim=768 (SESUAI CHECKPOINT!)
     model = FusionBackboneClassifier(
         backbone_name=BACKBONE_NAME,
         out_indices=(1, 2, 3),
-        fusion_dim=768,  # ✅ Sudah benar
-        num_classes=len(CLASS_NAMES),  # ✅ Sudah 2 class
+        fusion_dim=FUSION_DIM,  # 768 - PENTING!
+        num_classes=len(CLASS_NAMES),
         fusion_dropout=0.4,
         classifier_dropout=0.25,
     )
 
+    # Load checkpoint
     checkpoint = torch.load(MODEL_PATH, map_location="cpu")
 
-    # Ambil state_dict dari berbagai format
+    # Ekstrak state_dict
     if isinstance(checkpoint, dict):
         if "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
@@ -164,23 +171,30 @@ def load_model():
     else:
         state_dict = checkpoint
 
-    # Hilangkan prefix module. (DataParallel)
+    # Hapus prefix 'module.' jika ada (dari DataParallel)
     state_dict = {
         k.replace("module.", ""): v
         for k, v in state_dict.items()
     }
 
-    # LOAD STATE DICT
-    model.load_state_dict(state_dict, strict=True)
+    # Load state dict - strict=True karena sekarang sudah match!
+    try:
+        model.load_state_dict(state_dict, strict=True)
+        print("✅ Model loaded successfully dengan strict=True")
+    except RuntimeError as e:
+        print(f"⚠️ Error loading dengan strict=True: {e}")
+        print("🔄 Mencoba load dengan strict=False...")
+        model.load_state_dict(state_dict, strict=False)
     
-    # HAPUS BAGIAN REBUILD CLASSIFIER - TIDAK PERLU!
-    # Classifier sudah ada di checkpoint dan sudah sesuai dengan 2 class
-
+    # Set ke evaluation mode
     model.eval()
+    
     return model
 
+
+# Inisialisasi models
 mtcnn = load_mtcnn_model()
-model = load_model()
+model = load_model_v2()
 
 
 # ============================================================================
@@ -188,7 +202,7 @@ model = load_model()
 # ============================================================================
 
 def get_transforms():
-    """Transform yang SAMA dengan validation/test di training"""
+    """Transform untuk single prediction"""
     return A.Compose([
         A.Resize(256, 256),
         A.CenterCrop(224, 224),
@@ -226,7 +240,7 @@ def get_tta_transforms():
         A.Compose([
             A.Resize(256, 256),
             A.CenterCrop(224, 224),
-            A.Rotate(limit=(10, 10), p=1.0),
+            A.Rotate(limit=10, p=1.0),
             A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2()
         ]),
@@ -235,17 +249,17 @@ def get_tta_transforms():
 
 def process_image_for_model(img_pil, mtcnn_detector, target_size=224):
     """
-    Deteksi dan crop wajah, lalu persiapkan untuk model
+    Deteksi dan crop wajah menggunakan MTCNN
     """
     boxes, _ = mtcnn_detector.detect(img_pil)
-    processed_pil_image = None
-
+    
     if boxes is not None and len(boxes) > 0:
         # Pilih wajah terbesar
-        best_box = boxes[0]
         if len(boxes) > 1:
             areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in boxes]
             best_box = boxes[np.argmax(areas)]
+        else:
+            best_box = boxes[0]
 
         x1, y1, x2, y2 = [int(b) for b in best_box]
         width, height = img_pil.size
@@ -256,21 +270,15 @@ def process_image_for_model(img_pil, mtcnn_detector, target_size=224):
         x2 = min(width, x2)
         y2 = min(height, y2)
 
-        if x1 >= x2 or y1 >= y2:
-            st.warning("⚠️ Koordinat wajah tidak valid. Menggunakan gambar asli.")
-            processed_pil_image = img_pil
-        else:
-            cropped_face_pil = img_pil.crop((x1, y1, x2, y2))
-            if cropped_face_pil.size[0] == 0 or cropped_face_pil.size[1] == 0:
-                st.warning("⚠️ Area crop kosong. Menggunakan gambar asli.")
-                processed_pil_image = img_pil
-            else:
-                processed_pil_image = cropped_face_pil
-    else:
-        st.warning("⚠️ Tidak ada wajah terdeteksi. Menggunakan gambar asli.")
-        processed_pil_image = img_pil
-
-    return processed_pil_image
+        # Validasi koordinat
+        if x1 < x2 and y1 < y2:
+            cropped_face = img_pil.crop((x1, y1, x2, y2))
+            if cropped_face.size[0] > 0 and cropped_face.size[1] > 0:
+                return cropped_face
+    
+    # Jika gagal detect atau crop, gunakan gambar asli
+    st.warning("⚠️ Wajah tidak terdeteksi dengan jelas. Menggunakan gambar asli.")
+    return img_pil
 
 
 def predict_single(image_np, model, transform):
@@ -332,6 +340,14 @@ untuk mengklasifikasikan gambar wajah sebagai **Autistic** atau **Non-Autistic**
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Pengaturan")
+    
+    # Tombol clear cache
+    if st.button("🗑️ Clear Model Cache", help="Gunakan jika model tidak ter-load dengan benar"):
+        st.cache_resource.clear()
+        st.success("✅ Cache dihapus! Refresh halaman untuk reload model.")
+    
+    st.markdown("---")
+    
     use_tta = st.checkbox(
         "Gunakan TTA (Test-Time Augmentation)", 
         value=True,
@@ -342,6 +358,7 @@ with st.sidebar:
     st.header("📊 Info Model")
     st.info(f"""
     - **Backbone**: {BACKBONE_NAME}
+    - **Fusion Dim**: {FUSION_DIM}
     - **Input Size**: {TARGET_SIZE}x{TARGET_SIZE}
     - **Classes**: {', '.join(CLASS_NAMES)}
     - **TTA Transforms**: {len(get_tta_transforms()) if use_tta else 0}
@@ -363,7 +380,7 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Tampilkan gambar
+    # Load dan display gambar
     image = Image.open(uploaded_file).convert("RGB")
     
     col1, col2 = st.columns(2)
@@ -381,7 +398,7 @@ if uploaded_file is not None:
                 processed_np = np.array(processed_pil)
                 
                 with col2:
-                    st.subheader("✂️ Wajah yang Dideteksi")
+                    st.subheader("✂️ Wajah yang Diproses")
                     st.image(processed_pil, use_column_width=True)
                 
                 # 2. Prediction
@@ -420,7 +437,7 @@ if uploaded_file is not None:
                     for i, class_name in enumerate(CLASS_NAMES):
                         prob_pct = probs[i] * 100
                         st.write(f"**{class_name}**: {prob_pct:.2f}%")
-                        st.progress(probs[i])
+                        st.progress(float(probs[i]))
                 
                 # Interpretasi
                 st.markdown("---")
@@ -460,7 +477,7 @@ else:
     4. Lihat hasil klasifikasi
     """)
     
-    # Demo image placeholder
+    # Tips
     st.markdown("---")
     st.subheader("📝 Tips untuk Hasil Terbaik:")
     col1, col2, col3 = st.columns(3)
