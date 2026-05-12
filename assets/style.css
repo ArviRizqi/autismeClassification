@@ -1,0 +1,17 @@
+/* assets/style.css — optional light styling tweaks */
+
+/* Soften the default Streamlit metric card */
+[data-testid="stMetricValue"] {
+    font-size: 2rem;
+    font-weight: 600;
+}
+
+/* Widen sidebar slightly */
+[data-testid="stSidebar"] {
+    min-width: 260px;
+}
+
+/* Give progress bars a rounder look */
+[data-testid="stProgress"] > div > div {
+    border-radius: 4px;
+}
